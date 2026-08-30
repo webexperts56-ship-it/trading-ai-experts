@@ -1,0 +1,12 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.DS_Store
+.idea
+.tasks
+.pytest_cache
+data/*.db
+data/*.db-journal
