@@ -1,3 +1,13 @@
+---
+title: Trading AI Experts
+emoji: 📈
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 8000
+pinned: false
+---
+
 # Trading AI Experts
 
 Real-time multi-dimensional equity & crypto evaluation system. It fuses
