@@ -1,0 +1,16 @@
+# Replit config for Trading AI Experts
+entrypoint = "replit_files/main.py"
+
+[nix]
+channel = "stable"
+
+[env]
+ALERTS_ENABLED = "true"
+DESKTOP_ALERTS = "false"
+HOST = "0.0.0.0"
+PORT = "3000"
+
+[packager]
+language = "python"
+ignoredPackages = []
+run = ["python", "replit_files/main.py"]
