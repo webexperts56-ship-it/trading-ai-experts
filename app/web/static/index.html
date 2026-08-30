@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<!--
+  BUILD CONTRACT - read carefully. This is the single integration contract for all JS modules.
+  ---------------------------------------------------------------------------------------------
+  GLOBAL NAMESPACE: window.TA (never overwrite, merge onto existing object TA = TA || {}).
+
+  TA.state = {
+    snapshots: Map<symbol,String->object>, alerts: [], marketCtx: object|null,
+    sortKey: "market", sortDir: 1| -1, selected: symbol|null,
+    connected: bool, initialLoaded: bool, theme: "dark"|"light", tableQuery: ""
+  }
+
+  TA.utils (utils.js) - generic helpers.
+    esc(s), el(tag, cls, html), fmt(n, digits), fmtPctRatio(fraction) [fraction*100],
+    fmtPctNum(x, digits) [x IS ALREADY A PERCENT NUMBER], fmtMoney(n, cur, compact),
+    fmtCompact(n), fmtTime(iso), clamp(v, lo, hi), actionFor(score) -> 'sb|b|n|s|ss',
+    badgeMeasure(label, cls), pill(text, cls), scoreBar(score, cls), confBar(conf)
+
+  TA.charts (charts.js) - canvas/svg mini visualisations.
+    charts.sparkline(canvas, values, opts)   // graceful no-op if values empty
+    charts.gauge(target, p01, opts)          // 0..1 fraction -> annular progress, returns element
+
+  TA.core (core.js) - owns init + SSE + state + header + market strip + detail open/close.
+    init(), fetchInitial(), connectSSE(), connectPoll(), renderAll(),
+    setStatus(cls, text) [cls in online|offline|polling], setError(msg),
+    openDetail(symbol), closeDetail(), setTheme(next), sayMarketCtx(ctx)
+    Builds elements with IDs listed below; delegates table render to TA.table, alerts to TA.alerts.
+
+  TA.table (table.js) - renders the instruments <table>.
+    labels{}, buildHead(), sortBy(key), sortValue(snap, key), renderTable(), row(snap)
+    Column keys used for sorting must match the <th data-key> emitted by buildHead().
+    Data paring: snap.quote{price,change_1h_pct,change_1d_pct,volume_24h,market_cap,currency},
+    snap.signals[] (per horizon, fields: horizon,action,score,probability_up,confidence,
+    ml_probability,drivers), snap.fundamental{score,health,valuation,note}, snap.trend{regime,
+    strength,trend_score,ema_stack,adx,market_context}, snap.composite{score,action,bias},
+    snap.asset_class, snap.market, snap.provider, snap.name, snap.ts.
+
+  TA.detail (detail.js) - right-side overlay drawer.
+    renderDetail(symbol), close()
+    Uses snap.fundamental {score,health,valuation,note} (NOT *_score plural keys).
+
+  TA.alerts (alerts.js) - alert feed. render(list), add(alert), clear().
+    alert fields: ts,symbol,name,kind,horizon,action,entry_price,exit_price,
+    actual_return,probability,message. actual_return is a PERCENT NUMBER (0.05 = 0.05%).
+
+  UNITS CONTRACT (critical - old UI double-scaled these):
+    change_1h_pct / change_1d_pct / change_5d_pct / stats.change_*_pct / alerts.actual_return
+      -> ALREADY PERCENT NUMBERS. Display: "+" + x.toFixed(2) + "%". NEVER multiply by 100.
+    probability_up / ml_probability / market_context.breadth / mean_momentum
+      -> FRACTIONS 0..1. Display: Math.round(x*100) + "%".
+    trend.strength, trend.trend_score, composite.score, fundamental.score/health/valuation,
+    sig.score, sig.confidence -> plain numbers (-100..100 / 0..100).
+    volume_24h / market_cap -> plain numbers, use TA.utils.fmtCompact for readability.
+
+  DOM IDS (styles live in css/style.css, tokens in css/design-tokens.css).
+    Header:        #status-badge  #update-ts  #market-pill  #theme-toggle  #clock-display
+    Market strip:  #market-strip  (core.js fills .ms-cell spans: #ms-regime #ms-breadth
+                   #ms-momentum #ms-count #ms-alerts #ms-up #ms-down)
+    Table:         #table-head  #table-body  #table-note  #table-filter
+    Detail:        #detail-drawer  #detail-backdrop
+    Alerts:        #alerts-panel  #alerts-count  #alerts-list  #alerts-toggle  #alerts-clear
+    Misc:          #error-banner  #loader
+  CSS CLASSES the JS may use: .pill .pill-* .h-badge .sb/.b/.n/.s/.ss .score-bar .score-fill
+    .score-pos .score-neg .conf-bar .conf-fill .num-cell .mono .muted-small .accent .pos .neg
+    .selected .signal-strip .metric-row .metric-label .metric-value .driver-grid .driver-cell
+    .driver-key .driver-val .flash .card .card-title
+
+  RULES: no code comments, no external CDN/fonts/libs, no emojis (use unicode arrows/geometric
+  shapes only), plain JS (no frameworks), must work with the SSAE use case: server pushes every
+  ~5s via EventSource and renderAll() is called on each push; keep DOM churn minimal where
+  possible but correctness first.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#070b12">
+<title>Trading AI Experts · Live Signal Desk</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2338bdf8'/%3E%3Cstop offset='1' stop-color='%23818cf8'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M8 20l5-7 4 5 7-9' stroke='%23070b12' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/css/design-tokens.css">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<div id="loader" class="loader" aria-hidden="true"><div class="loader-bar"></div></div>
+
+<div class="app-shell">
+
+  <header class="app-bar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="24" height="24"><rect width="32" height="32" rx="8" fill="url(#bg)"/><path d="M8 20l5-7 4 5 7-9" stroke="#070b12" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+      <div class="brand-text">
+        <span class="brand-title">Trading AI Experts</span>
+        <span class="brand-sub">Real-time evaluation &amp; signal engine</span>
+      </div>
+    </div>
+
+    <div class="app-actions">
+      <span id="market-pill" class="pill pill-muted">loading regime…</span>
+      <span id="status-badge" class="badge badge-offline"><span class="dot-pulse"></span>connecting</span>
+      <span id="clock-display" class="clock mono">--:--:--</span>
+      <button id="theme-toggle" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">
+        <span class="theme-glyph">◐</span>
+      </button>
+    </div>
+  </header>
+
+  <section id="market-strip" class="market-strip" aria-label="Market overview">
+    <div class="ms-cell"><span class="ms-label">Market regime</span><span id="ms-regime" class="ms-value pill pill-muted">—</span></div>
+    <div class="ms-cell"><span class="ms-label">Breadth</span><span id="ms-breadth" class="ms-value mono">—</span></div>
+    <div class="ms-cell"><span class="ms-label">Momentum</span><span id="ms-momentum" class="ms-value mono">—</span></div>
+    <div class="ms-cell"><span class="ms-label">Instruments</span><span id="ms-count" class="ms-value mono">—</span></div>
+    <div class="ms-cell"><span class="ms-label">Alerts</span><span id="ms-alerts" class="ms-value mono">—</span></div>
+    <div class="ms-cell"><span class="ms-label">Crowd</span><span id="ms-crowd" class="ms-value mono">—</span></div>
+    <div class="ms-cell ms-cell-green"><span class="ms-label">Bullish</span><span id="ms-up" class="ms-value mono pos">—</span></div>
+    <div class="ms-cell ms-cell-red"><span class="ms-label">Bearish</span><span id="ms-down" class="ms-value mono neg">—</span></div>
+  </section>
+
+  <div class="main-grid">
+
+    <section class="card market-card">
+      <div class="card-toolbar">
+        <div class="card-titles">
+          <h2 class="card-title">Instruments</h2>
+          <span id="table-note" class="card-sub">loading…</span>
+        </div>
+        <div class="card-controls">
+          <input id="table-filter" class="search-input" type="search" placeholder="Filter by symbol, name or market…" aria-label="Filter instruments">
+        </div>
+      </div>
+      <div id="table-wrap" class="table-wrap">
+        <ul id="watch-list" class="watch-list" aria-label="Instruments"></ul>
+        <div class="table-scroll">
+          <table id="main-table" class="main-table">
+            <thead><tr id="table-head"></tr></thead>
+            <tbody id="table-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <aside id="alerts-panel" class="card alerts-card hidden" aria-label="Prediction alerts">
+      <div class="card-toolbar">
+        <div class="card-titles">
+          <h2 class="card-title">Prediction Alerts</h2>
+          <span id="alerts-count" class="alerts-count mono">0</span>
+        </div>
+        <div class="card-controls">
+          <button id="alerts-clear" class="btn-ghost">Clear</button>
+          <button id="alerts-toggle" class="btn-ghost">Collapse</button>
+        </div>
+      </div>
+      <div id="alerts-list" class="alerts-list"></div>
+      <div id="alerts-empty" class="alerts-empty muted-small">No resolved predictions yet — alerts appear when a tracked signal expires.</div>
+    </aside>
+
+  </div>
+
+  <section class="card crowd-card" aria-label="Crowd predictions">
+    <div class="card-toolbar">
+      <div class="card-titles">
+        <h2 class="card-title">Crowd Predictions</h2>
+        <span id="crowd-note" class="card-sub">connecting…</span>
+      </div>
+      <div class="card-controls crowd-controls">
+        <span id="crowd-live" class="pill pill-muted">live</span>
+      </div>
+    </div>
+    <div id="crowd-mood" class="crowd-mood"></div>
+    <div id="crowd-list" class="crowd-list"></div>
+  </section>
+
+  <section class="card" aria-label="Market consensus">
+    <div class="card-toolbar">
+      <div class="card-titles">
+        <h2 class="card-title">Market Signal Consensus</h2>
+        <span id="consensus-note" class="card-sub">waiting for live data…</span>
+      </div>
+    </div>
+    <div id="consensus" class="panel-body"></div>
+  </section>
+
+  <section class="card" aria-label="Prediction accuracy">
+    <div class="card-toolbar">
+      <div class="card-titles">
+        <h2 class="card-title">Prediction Accuracy</h2>
+        <span id="accuracy-note" class="card-sub">sahi / ghalat ratio</span>
+      </div>
+    </div>
+    <div id="accuracy" class="panel-body"></div>
+  </section>
+
+  <footer class="app-foot muted-small">
+    <span>Alpaca-style signal desk · ML ensemble + technicals + fundamentals + trend</span>
+    <span id="update-ts" class="mono">—</span>
+  </footer>
+
+</div>
+
+<div id="detail-backdrop" class="detail-backdrop hidden"></div>
+<aside id="detail-drawer" class="detail-drawer hidden" aria-label="Instrument detail"></aside>
+
+<div id="error-banner" class="error-banner hidden" role="alert"></div>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#818cf8"/></linearGradient>
+</defs></svg>
+
+<script src="/static/js/utils.js"></script>
+<script src="/static/js/charts.js"></script>
+<script src="/static/js/core.js"></script>
+<script src="/static/js/table.js"></script>
+<script src="/static/js/detail.js"></script>
+<script src="/static/js/alerts.js"></script>
+<script src="/static/js/crowd.js"></script>
+<script src="/static/js/panels.js"></script>
+<script src="/static/js/consensus-fetch.js"></script>
+</body>
+</html>

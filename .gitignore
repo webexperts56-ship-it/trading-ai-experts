@@ -1,0 +1,17 @@
+# Secrets - NEVER commit
+.env
+
+# Runtime data
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+/tmp/
