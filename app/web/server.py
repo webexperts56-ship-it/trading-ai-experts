@@ -43,7 +43,44 @@ def _alert_id(alert):
     return alert.get("ts") or alert.get("id") or (alert.get("symbol") + str(alert.get("ts")))
 
 
+import base64
+import os
+import secrets
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
 app = FastAPI(title="Trading AI Experts", version="1.0.0")
+
+class BasicAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        auth_pass = getattr(CONFIG, "auth_password", "") if CONFIG is not None else os.getenv("AUTH_PASSWORD", "")
+        if not auth_pass:
+            return await call_next(request)
+
+        # Allow health check without auth
+        if request.url.path == "/api/health":
+            return await call_next(request)
+
+        auth_header = request.headers.get("Authorization")
+        auth_user = getattr(CONFIG, "auth_username", "admin") if CONFIG is not None else os.getenv("AUTH_USERNAME", "admin")
+
+        if auth_header and auth_header.startswith("Basic "):
+            try:
+                encoded = auth_header.split(" ", 1)[1]
+                decoded = base64.b64decode(encoded).decode("utf-8")
+                username, _, password = decoded.partition(":")
+                if secrets.compare_digest(username, auth_user) and secrets.compare_digest(password, auth_pass):
+                    return await call_next(request)
+            except Exception:
+                pass
+
+        return Response(
+            content="Authentication Required",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="Trading AI Dashboard"'},
+        )
+
+app.add_middleware(BasicAuthMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

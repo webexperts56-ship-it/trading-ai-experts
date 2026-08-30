@@ -102,6 +102,9 @@ class Config:
     db_path: str = os.getenv("DB_PATH", "data/signals.db")
     models_dir: str = os.getenv("MODELS_DIR", "models")
 
+    auth_username: str = os.getenv("AUTH_USERNAME", "admin")
+    auth_password: str = os.getenv("AUTH_PASSWORD", "")
+
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = _env_int("PORT", 8000)
 
