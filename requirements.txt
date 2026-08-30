@@ -7,3 +7,4 @@ pandas>=2.2
 numpy>=1.26
 scikit-learn>=1.4
 python-dotenv>=1.0gradio>=4.0
+a2wsgi>=1.10.0
